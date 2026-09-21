@@ -1,0 +1,107 @@
+# Local development infrastructure for the personal finances app.
+#
+# Scope: this file runs the MySQL server the application connects to, plus Adminer
+# (a single-page web UI) to manage that database from the browser. The Laravel/Filament
+# app itself runs on the host (`php artisan serve` / `composer run dev`) and reaches the
+# database through 127.0.0.1:<FORWARD_DB_PORT>.
+#
+#   docker compose up -d          # start the database and the Adminer UI
+#   docker compose ps             # status — wait for "healthy"
+#   docker compose logs -f mysql  # server logs
+#   docker compose exec mysql mysql -u"$DB_USERNAME" -p"$DB_PASSWORD" "$DB_DATABASE"   # client shell
+#   docker compose down           # stop the containers, keep the data
+#   docker compose down -v        # DESTRUCTIVE: also deletes the volume and all data
+#
+# Adminer: http://127.0.0.1:8081 — System "MySQL", Server "127.0.0.1" (pre-filled), and the
+# Username/Password/Database from the variables below. It binds to 127.0.0.1 only: Adminer
+# has no access control of its own beyond the database credentials, so it must not be
+# exposed to a network.
+#
+# Known environment limitation (verified 2026-09-21 in this Codespace/devcontainer):
+# user-defined bridge networks — including the one Compose creates — drop traffic between
+# containers on them (`Operation timed out`), with or without `enable_icc`. Host -> container
+# (published ports) works, and container-to-container on the legacy `docker0` bridge works.
+# That is why Adminer uses `network_mode: host` and talks to the database through its
+# published port. On a machine without that limitation, the idiomatic form is
+# `ADMINER_DEFAULT_SERVER: 'mysql'` plus `ports: ['127.0.0.1:${FORWARD_ADMINER_PORT:-8081}:8080']`
+# and `networks: [personal-finances]`.
+#
+# Credentials are read from the same variable names Laravel already uses in `.env`
+# (nothing is duplicated), with development-only fallbacks so a fresh clone works
+# before the application is scaffolded. Set these in `.env`:
+#
+#   DB_CONNECTION=mysql
+#   DB_HOST=127.0.0.1        # use `mysql` instead if the app itself runs in this network
+#   DB_PORT=3306
+#   DB_DATABASE=personal_finances
+#   DB_USERNAME=laravel
+#   DB_PASSWORD=change_me_local_only
+#   MYSQL_ROOT_PASSWORD=change_me_local_only    # server bootstrap / administration only
+#   FORWARD_DB_PORT=3306                        # optional: host port published for MySQL
+#   FORWARD_ADMINER_PORT=8081                   # optional: loopback port Adminer binds to
+#
+# `.env` is gitignored — never commit real credentials here.
+
+services:
+    mysql:
+        image: 'mysql:8.4'
+        restart: unless-stopped
+        ports:
+            # Published on 127.0.0.1 on purpose: a development database should not be
+            # reachable from the network. Bind to 0.0.0.0 only if a remote GUI tool
+            # genuinely needs to connect, and understand the exposure it creates.
+            - '127.0.0.1:${FORWARD_DB_PORT:-3306}:3306'
+        environment:
+            MYSQL_DATABASE: '${DB_DATABASE:-personal_finances}'
+            MYSQL_USER: '${DB_USERNAME:-laravel}'
+            MYSQL_PASSWORD: '${DB_PASSWORD:-password}'
+            MYSQL_ROOT_PASSWORD: '${MYSQL_ROOT_PASSWORD:-root}'
+            # Lets the root account connect from a GUI client running on the host.
+            # Harmless while the port stays bound to 127.0.0.1.
+            MYSQL_ROOT_HOST: '%'
+        volumes:
+            # Named volume: `docker compose down` keeps the data, `down -v` deletes it.
+            - 'mysql-data:/var/lib/mysql'
+        networks:
+            - personal-finances
+        healthcheck:
+            # `$$` escapes compose interpolation, so the password is expanded inside the
+            # container from its own environment and never lands in `docker compose config`.
+            test: ['CMD-SHELL', 'mysqladmin ping -h 127.0.0.1 -u root -p"$$MYSQL_ROOT_PASSWORD" --silent']
+            interval: 10s
+            timeout: 5s
+            retries: 5
+            # First boot has to initialise the data directory before it can serve connections.
+            start_period: 30s
+
+    adminer:
+        image: 'adminer:6'
+        restart: unless-stopped
+        depends_on:
+            # No point serving the login page before the server accepts connections.
+            mysql:
+                condition: service_healthy
+        # Host networking on purpose — see "Known environment limitation" at the top of this
+        # file: this machine drops container-to-container traffic on user-defined bridges, so
+        # Adminer reaches the database through its published port on 127.0.0.1 instead of
+        # through the `mysql` service name. The database keeps using the compose network.
+        network_mode: host
+        command:
+            # Loopback only, so the UI cannot be reached from the network.
+            - php
+            - -S
+            - '127.0.0.1:${FORWARD_ADMINER_PORT:-8081}'
+            - -t
+            - /var/www/html
+        environment:
+            # Pre-fills the "Server" field of the login form; loopback is where the database
+            # port is published on the host. Deliberately no credentials here: Adminer asks
+            # for them at login, so this container holds no database secret.
+            ADMINER_DEFAULT_SERVER: '127.0.0.1'
+
+volumes:
+    mysql-data:
+
+networks:
+    personal-finances:
+        driver: bridge
