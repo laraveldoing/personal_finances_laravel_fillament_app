@@ -212,15 +212,40 @@ One-line check: `docs/CHANGELOG.md` contains a dated entry for this change, and 
   portable-but-broken one.
 - **Reversibility:** easy (and `hard` for neither direction: no data is involved).
 
+### D9: the application is not scaffolded and not containerized (deferred)
+- **Context:** after the database and Adminer were working, the open question was whether the
+  application should also run in Docker. Investigating that surfaced a blocker: the repository still
+  contains no Laravel application at all (no `artisan`, `composer.json`, `.env`, `vendor/` or `app/`),
+  re-verified on 2026-09-21.
+- **Options considered:** scaffold Laravel 13 + Filament 5 at the repository root (which means moving
+  this guidelines library to `.ai/guidelines/`, where Laravel Boost reads project guidelines from)
+  and containerize it; scaffold it into a subdirectory instead; ship only `Dockerfile` + compose
+  service with no application to build; stop at database + Adminer.
+- **Decision:** stop at database + Adminer. Both the scaffold and the app container are deferred —
+  chosen by the person, not assumed.
+- **Reason:** containerizing first requires installing the framework and its dependencies (a
+  dependency installation, which is not taken without confirmation), `composer create-project` refuses
+  a non-empty directory so the layout question cannot be sidestepped, and this machine would force
+  `network_mode: host` + `DB_HOST=127.0.0.1` on the app anyway (`D8`). Deferring keeps the repository
+  honest: nothing unverifiable gets committed, and no half-built skeleton is left behind.
+- **Facts recorded for whoever picks this up (verified 2026-09-21):**
+  - Laravel 13 requires PHP `^8.3`; latest `laravel/framework` was `v13.32.0` (2026-09-15).
+  - Current Filament release was `v5.8.4` (2026-09-20), requiring PHP `^8.2` — note it is **5.x**, not
+    the 4.x branch that older examples show.
+  - Host PHP is 8.4.15 but is missing `pdo_mysql`, `intl`, `zip` and `bcmath` — which is itself an
+    argument for running the app in a container rather than on the host.
+  - Node 24.21.0 and npm 11.19.0 are available on the host for asset builds.
+  - In this environment the app container would have to use `network_mode: host` with
+    `DB_HOST=127.0.0.1` (`D8`), not `DB_HOST=mysql`, because container-to-container traffic on
+    user-defined bridges is dropped here.
+- **Reversibility:** easy — nothing was created.
+
 ## Blockers / open questions
 
-- The repository holds no Laravel application yet. Scaffolding it (`laravel new` /
-  `composer create-project laravel/laravel .`) plus Filament is **out of scope** for this task and
-  needs explicit confirmation — and it must happen before `.env` can hold the `DB_*` values.
-  Note: `composer create-project` refuses to run in a non-empty directory, so the scaffold has to
-  happen first (or in a temporary directory) if this repository root is meant to hold the app.
-- Whether the application itself should also be containerized (Sail or a hand-written app service
-  on the `personal-finances` network with `DB_HOST=mysql`) is undecided.
+- _(Deferred 2026-09-21, D9)_ No Laravel application exists in this repository, so nothing is
+  containerized for it yet: no scaffold, no `Dockerfile`, no `app` service. The blockers, the layout
+  choice and the verified version facts are all recorded in `D9` above so the task can be resumed
+  without re-deriving any of it.
 - _(Resolved 2026-09-21)_ The verification table `persistence_check` was dropped on request, keeping
   the database, the `laravel` user and the volume. `docker compose down -v` (full volume reset) was
   offered as the alternative and explicitly **not** used.
