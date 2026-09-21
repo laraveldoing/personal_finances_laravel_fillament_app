@@ -178,6 +178,40 @@ One-line check: `docs/CHANGELOG.md` contains a dated entry for this change, and 
   `documentation/changelog-and-docs.md` (offer extra docs/services, don't create them unprompted).
 - **Reversibility:** easy.
 
+### D7: Adminer instead of phpMyAdmin
+- **Context:** a browser UI was requested to manage the development database; both candidates would
+  sit next to the already-verified `mysql` service.
+- **Options considered:** `phpmyadmin:5` (5.2.3 — 196.6 MB compressed / ~500 MB on disk, richer UI,
+  ships its own Apache/PHP-FPM stack); `adminer:6` (6.0.1 — 43.7 MB compressed / ~156 MB on disk,
+  one PHP built-in server, one page); no UI at all (the D6 default).
+- **Decision:** `adminer:6`, chosen by the person after seeing both sizes. `adminer:5` and
+  `adminer:latest` also exist; the tag is pinned to the major, matching `mysql:8.4`, so upgrades
+  stay intentional.
+- **Reason:** ~4.5× smaller download, and its whole configuration is the login screen — no
+  credential has to be injected into the container to make it work.
+- **Reversibility:** easy (swap the service block; the database is untouched either way).
+
+### D8: Adminer reaches the database through the published loopback port (`network_mode: host`)
+- **Context:** with the idiomatic definition (service on the `personal-finances` bridge network,
+  `ADMINER_DEFAULT_SERVER=mysql`), the UI served its login page but could not reach the database.
+  Investigation showed the cause is environmental, not a defect in the definition.
+- **Options considered:** keep the bridge + service name (correct on a normal Docker install, dead
+  end here); `extra_hosts: host.docker.internal:host-gateway` so the container reaches the published
+  port (still forwards container -> container on the host, i.e. the broken path); `network_mode: host`
+  plus the published loopback port (built on the path that *is* proven here); dropping the UI.
+- **Decision:** `network_mode: host`, `command` overriding the bind address to
+  `127.0.0.1:${FORWARD_ADMINER_PORT:-8081}` (loopback only), and `ADMINER_DEFAULT_SERVER=127.0.0.1`.
+  The database keeps the compose network, so the path the application uses is unchanged.
+- **Reason:** measured, not assumed — a container could not reach another container on *any*
+  user-defined bridge on this machine (the Compose network, a freshly created `diag-net`, and one
+  created with `com.docker.network.bridge.enable_icc=true` all timed out, with DNS resolving
+  correctly), while the legacy `docker0` bridge and host -> published port both work.
+- **Trade-off accepted:** host networking is Linux-only and less portable than the bridge form, and
+  it removes the published-port line for this service. The file documents the idiomatic alternative
+  for machines without the limitation; a verified-working UI was judged worth more than a
+  portable-but-broken one.
+- **Reversibility:** easy (and `hard` for neither direction: no data is involved).
+
 ## Blockers / open questions
 
 - The repository holds no Laravel application yet. Scaffolding it (`laravel new` /
@@ -207,10 +241,37 @@ vs 196.6 MB compressed / ~500 MB on disk), with the application still running on
 
 ### Subtask 6: add the Adminer service
 
-- [ ] 6.1 Add an `adminer` service to `docker-compose.yml`, on the existing network, with no
-      database credentials in its environment and reachable from the host only
-- [ ] 6.2 Verify it serves the login page and reaches the database over the compose network
-- [ ] 6.3 Document (this section, `_index.md`, `docs/CHANGELOG.md`)
+- [x] 6.1 Add an `adminer` service to `docker-compose.yml`, with no database credentials in its
+      environment and reachable from the host only
+- [x] 6.2 Verify it serves the login page and reaches the application database
+- [x] 6.3 Document (this section, `_index.md`, `docs/CHANGELOG.md`)
+
+### Verification evidence (2026-09-21, after `docker compose up -d`)
+
+| Check | Command | Observed |
+|---|---|---|
+| Both services declared | `docker compose config --services` | `mysql`, `adminer` |
+| Config still valid | `docker compose config --quiet` | exit 0, no output |
+| Database healthy first | `docker compose ps` | `mysql` `Up (healthy)` |
+| UI serves the login page | `curl -o /dev/null -w '%{http_code}' http://127.0.0.1:8081` | `200`; title `Login - Adminer` |
+| Host-only bindings | `ss -ltn` filtered to the two ports | `127.0.0.1:3306` and `127.0.0.1:8081`; no `0.0.0.0` listener on either |
+| No credentials in the service | `docker inspect` on the Adminer container's `Config.Env` | only `ADMINER_DEFAULT_SERVER=127.0.0.1` plus the image's own defaults |
+| Login through the UI works | `POST /?server=127.0.0.1` with the app credentials **and Adminer's CSRF `token`** | `302` → `?server=127.0.0.1&username=laravel&db=personal_finances` |
+| The application database opens | `GET ?server=127.0.0.1&username=laravel&db=personal_finances` | `200`, title `Database: personal_finances` |
+| A real query returns real data | `POST` on the `&sql=` page: `SELECT DATABASE(), VERSION(), (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE())` | result grid `personal_finances` / `8.4.11` / `0` |
+| Database left untouched | `SHOW TABLES` as `laravel` | empty — the UI check was read-only, no artifact this time |
+
+The cross-container path was re-tested instead of assumed, since it is the sole justification for
+this service's host networking (`D8`):
+
+| Check | Command | Observed |
+|---|---|---|
+| Service name resolves on the bridge | `docker compose exec mysql getent hosts mysql` | `172.18.0.2 mysql` — DNS works |
+| A container reaching *another* container on the bridge | `docker run --rm --network …_personal-finances mysql:8.4 mysql -h mysql …` | no response; killed at 40 s (`exit 143`) — the TCP path is dropped |
+| A container reaching its *own* service name | `docker compose exec mysql mysql -h mysql …` | succeeds — `172.18.0.2` loops back locally, so this says nothing about the bridge |
+| The published loopback port | `docker compose exec mysql mysql -h 127.0.0.1 …` | succeeds — this is the path Adminer uses |
+
+### Success criteria
 
 ```gherkin
 Feature: Adminer web UI
@@ -224,12 +285,15 @@ Feature: Adminer web UI
     Given `docker compose up -d` completed and the database is healthy
     When `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8081` runs
     Then it returns `200`
-    And `docker compose ps` shows the published port bound to `127.0.0.1`, not `0.0.0.0`
+    And `ss -ltn` shows `8081` bound to `127.0.0.1` with no `0.0.0.0:8081` listener
+      (note: `docker compose ps` prints no published port here, because the container uses host
+      networking — see D7 — so it is not the right check for this scenario)
 
-  Scenario: Adminer reaches the database over the compose network
+  Scenario: Adminer reaches the application database
     Given both containers are running
-    When a TCP connection to host `mysql`, port `3306`, is opened from inside the Adminer container
-    Then the connection succeeds
+    When the UI logs in with the credentials from `docker-compose.yml` and runs a read-only query
+    Then the database page opens as `personal_finances`
+    And the query reports `8.4.11` as the server version
 
   Scenario: No credentials are stored in the Adminer service
     Given `docker-compose.yml` is inspected
@@ -237,4 +301,9 @@ Feature: Adminer web UI
     Then it holds no `MYSQL_*`/`DB_PASSWORD` value — only the default server name, since Adminer
       asks for credentials at login
 ```
+
+The original third scenario ("a TCP connection to host `mysql`, port `3306`, is opened from inside
+the Adminer container … succeeds") was never achievable: that is precisely the path this environment
+drops. It has been rewritten to the implemented path rather than left as a criterion the code cannot
+meet.
 

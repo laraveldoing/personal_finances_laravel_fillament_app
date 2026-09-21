@@ -17,3 +17,21 @@
   in `/plans/mysql-docker-container.md`.
 - **Open items:** the repository still contains no Laravel application; scaffolding it (and deciding
   whether it should also run in Docker) is tracked in `/plans/_index.md`.
+
+### Adminer web UI for the development database
+- **Modules affected:** none in the application yet — extends the local infrastructure.
+- **Implementation:** new `adminer` service (`adminer:6`, resolved to 6.0.1) in `docker-compose.yml`.
+  Its PHP server is overridden to bind `127.0.0.1:${FORWARD_ADMINER_PORT:-8081}` and the service runs
+  with host networking so it reaches the database through the published loopback port. It stores no
+  database credentials — only `ADMINER_DEFAULT_SERVER=127.0.0.1`, which pre-fills the login form.
+- **Technical decisions:** Adminer chosen over phpMyAdmin (43.7 MB vs 196.6 MB compressed). Host
+  networking was forced by an environment limitation, not preference: on this machine a container
+  cannot reach another container on **any** user-defined bridge (the Compose network, a fresh test
+  network, and one created with `enable_icc=true` all timed out, with DNS resolving correctly), while
+  the legacy `docker0` bridge and host → published port both work. The idiomatic bridge form is
+  documented in the file for machines without the limitation. Reasoning in
+  `/plans/mysql-docker-container.md` (D7, D8).
+- **Verified:** login page `200` at `http://127.0.0.1:8081` bound to loopback; a real `mysqli`
+  connection from inside the Adminer container reports `8.4.11` / `personal_finances`; a full UI
+  login (CSRF token + cookie) reaches the database page. The database was left untouched (read-only
+  checks).
