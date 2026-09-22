@@ -163,6 +163,23 @@ Feature: Verified connection
 ## Next (not started, tracked in `/plans/_index.md`)
 
 Steps 3 and 4 of the request, deliberately not begun:
+
+**Facts read from the application on disk (2026-09-22), which step 3 has to accommodate:**
+- The skeleton's three migrations create **8 tables**: `users`, `password_reset_tokens` and `sessions`
+  (`0001_01_01_000000`), `cache` + `cache_locks` (`...000001`), `jobs` + `job_batches` + `failed_jobs`
+  (`...000002`). The schema script introduces a second definition of `users`, which is the clash.
+- `.env` wires `SESSION_DRIVER=database`, `CACHE_STORE=database` and `QUEUE_CONNECTION=database`, so the
+  `sessions`, `cache`/`cache_locks` and `jobs` family are not optional decoration — dropping them breaks
+  sessions and the queue.
+- `App\Models\User` expects `id`, `name`, `email` (unique), `email_verified_at`, `password`,
+  `remember_token` and timestamps, with `password` cast to `hashed`. A script whose `users` table differs
+  (no `remember_token`, split name columns, extra required columns) needs the model adapted, not just the
+  import.
+- Laravel 13 declares `Fillable`/`Hidden` as **PHP attributes** on the model (`#[Fillable([...])]`)
+  rather than `protected $fillable`/`$hidden` properties — relevant when wiring Filament resources.
+- Unresolved until the script is in hand: integer vs `DECIMAL` money columns, foreign keys with explicit
+  `ON DELETE`, and indexes on date columns.
+
 - **Step 3 — SQL schema import.** Needs the SQL script (`users`, `accounts`, `categories`,
   `transactions`, `budgets`). Two things to settle then: how it coexists with the skeleton's own
   `0001_01_01_000000_create_users_table` migration (both define `users`), and whether it is applied with
