@@ -1,9 +1,15 @@
 -- Esquema de dominio de la aplicación de finanzas personales.
 --
--- Origen: script entregado por la persona responsable del proyecto (2026-09-22), reproducido
--- sin cambios de semántica. Se aplica tal cual sobre la base de datos `personal_finances` del
--- contenedor MySQL definido en `docker-compose.yml` (el nombre aparece en singular en las dos
--- líneas comentadas de abajo: no se descomentan, la base ya existe con el nombre en plural).
+-- Origen: script entregado por la persona responsable del proyecto (2026-09-22). Se aplicó tal cual
+-- sobre la base de datos `personal_finances` del contenedor MySQL definido en `docker-compose.yml`
+-- (el nombre aparece en singular en las dos líneas comentadas de abajo: no se descomentan, la base
+-- ya existe con el nombre en plural).
+--
+-- Cambio de semántica (2026-09-23, decisión D19 en `/plans/schema-import-and-filament.md`): las
+-- reglas `ON DELETE` de tres claves foráneas dejaron de ser `CASCADE` para proteger el historial
+-- financiero — `fk_transactions_account` → `RESTRICT`, `fk_transactions_category` → `SET NULL`
+-- (por eso `transactions.category_id` es NULL) y `fk_budgets_category` → `RESTRICT`. Los cascades
+-- sobre `users` (`fk_*_user`) se mantienen: su política sigue pendiente (finding 2 del plan).
 --
 -- Orden de aplicación: primero `php artisan migrate` (crea las tablas del framework: `migrations`,
 -- `sessions`, `cache`, `cache_locks`, `jobs`, `job_batches`, `failed_jobs`, `password_reset_tokens`
@@ -66,7 +72,7 @@ CREATE TABLE IF NOT EXISTS `transactions` (
   `id` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   `user_id` BIGINT UNSIGNED NOT NULL,
   `account_id` BIGINT UNSIGNED NOT NULL,
-  `category_id` BIGINT UNSIGNED NOT NULL,
+  `category_id` BIGINT UNSIGNED NULL, -- NULL: la transacción sobrevive si se elimina la categoría (D19)
   `amount` DECIMAL(12, 2) NOT NULL,
   `transaction_date` DATE NOT NULL,
   `payee` VARCHAR(255) NULL, -- Beneficiario o comercio donde se realizó el gasto
@@ -77,8 +83,8 @@ CREATE TABLE IF NOT EXISTS `transactions` (
   `updated_at` TIMESTAMP NULL,
   `deleted_at` TIMESTAMP NULL,
   CONSTRAINT `fk_transactions_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `fk_transactions_account` FOREIGN KEY (`account_id`) REFERENCES `accounts` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `fk_transactions_category` FOREIGN KEY (`category_id`) REFERENCES `categories` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_transactions_account` FOREIGN KEY (`account_id`) REFERENCES `accounts` (`id`) ON DELETE RESTRICT, -- protege el historial: no se puede borrar una cuenta con transacciones (D19)
+  CONSTRAINT `fk_transactions_category` FOREIGN KEY (`category_id`) REFERENCES `categories` (`id`) ON DELETE SET NULL, -- la transacción queda sin categoría en vez de borrarse (D19)
   -- Índices estratégicos para acelerar consultas, reportes y filtros del panel de Filament
   INDEX `idx_user_trans_date` (`user_id`, `transaction_date`),
   INDEX `idx_category_trans_date` (`category_id`, `transaction_date`)
@@ -95,7 +101,7 @@ CREATE TABLE IF NOT EXISTS `budgets` (
   `created_at` TIMESTAMP NULL,
   `updated_at` TIMESTAMP NULL,
   CONSTRAINT `fk_budgets_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `fk_budgets_category` FOREIGN KEY (`category_id`) REFERENCES `categories` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_budgets_category` FOREIGN KEY (`category_id`) REFERENCES `categories` (`id`) ON DELETE RESTRICT, -- un presupuesto sin categoría no existe; y `uq_user_category_period` incluye `category_id` (D19)
   -- Restricción única para evitar duplicar el presupuesto de la misma categoría en un mismo mes/año por usuario
   CONSTRAINT `uq_user_category_period` UNIQUE (`user_id`, `category_id`, `month`, `year`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

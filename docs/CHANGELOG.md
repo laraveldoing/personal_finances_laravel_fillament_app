@@ -111,3 +111,27 @@
 - **Open items:** the step-3 schema findings still await a decision (first: `ON DELETE CASCADE` on
   financial history); Laravel Boost is still not installed (`AGENTS.md` untouched — installing it
   regenerates that file, which requires explicit approval).
+
+### Financial-history FKs stop cascading (finding 1 remediation)
+- **Modules affected:** `database/schema/01-personal-finances.sql` (3 FK definitions +
+  `transactions.category_id` nullability + header) and the live `personal_finances` database
+  (same 3 constraints via `ALTER TABLE`). No application code.
+- **Implementation:** `fk_transactions_account` `CASCADE` → `RESTRICT`; `fk_transactions_category`
+  `CASCADE` → `SET NULL` (column made nullable); `fk_budgets_category` `CASCADE` → `RESTRICT`
+  (column stays `NOT NULL`). The four `fk_*_user` cascades and `fk_categories_parent` are
+  untouched.
+- **Technical decisions:** per-FK rules instead of a blanket change (D19): accounts are *required*
+  by history so deletes are refused; categories are *optional* so history detaches; budgets keep
+  `category_id` `NOT NULL` because `SET NULL` would create category-less budgets and weaken
+  `uq_user_category_period` (MySQL UNIQUE permits repeated NULLs). The script header now records
+  the semantic change — D15's "no semantic changes" claim is explicitly historical. Reasoning and
+  full evidence in `/plans/schema-import-and-filament.md`.
+- **Verified:** functional tests on the live DB — hard-delete of an account with a transaction and
+  of a category with a budget both fail with error 1451 (RESTRICT), hard-delete of a category
+  without budgets succeeds and the transaction survives with `category_id = NULL`; test rows
+  cleaned (domain tables back to 0, `users` untouched). Fresh import of the updated script into a
+  scratch database produced an identical `(table, constraint, delete_rule)` set (`DIFF_EXIT=0`);
+  scratch dropped.
+- **Open items:** findings 2–8 unchanged — the `fk_*_user` cascades mean a user hard-delete still
+  destroys history (finding 2, needs a policy decision); enum-vs-varchar status, `month`/`year`
+  range checks, `amount` sign convention and the missing transfer concept remain open.

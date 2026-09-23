@@ -1,7 +1,7 @@
 # SQL schema import + Filament panel (steps 3–4)
 
 ## Status
-`complete` — step 3 (schema import) and step 4 (Filament panel + admin user) both verified
+`complete` — steps 3–4 verified; finding 1 (`ON DELETE CASCADE` on financial history) remediated and verified (subtasks 11–14)
 
 ## Context
 The application (Laravel 13.33.0 at the repository root) is connected to the MySQL 8.4.11 container,
@@ -35,6 +35,19 @@ Step 4 (Filament panel + admin user):
 - [x] 8. Create `AdminUserSeeder` (credentials from `FILAMENT_ADMIN_*` env vars, never hardcoded) and run it
 - [x] 9. Verify end to end: dependency present, panel routes, login page serves, admin row hashes correctly
 - [x] 10. Document: `docs/CHANGELOG.md` entry, close this plan, update `/plans/_index.md`; commit
+
+Finding 1 remediation (`ON DELETE CASCADE` on financial history):
+
+- [x] 11. Apply the three FK changes to the live database (`fk_transactions_account` → `RESTRICT`,
+      `fk_transactions_category` → `SET NULL` + `category_id` nullable, `fk_budgets_category` →
+      `RESTRICT`) and verify `DELETE_RULE` in `information_schema`
+- [x] 12. Functional proof: hard-delete of an account is refused, hard-delete of a category without
+      budgets detaches its transactions (`category_id → NULL`), hard-delete of a category with
+      budgets is refused; test rows removed afterwards (domain tables back to 0 rows)
+- [x] 13. Update `database/schema/01-personal-finances.sql` so a fresh import produces the same
+      rules, and prove it by importing into a scratch database and diffing `DELETE_RULE`
+- [x] 14. Document: D19, finding 1 marked resolved, `docs/CHANGELOG.md` entry, `_index.md`, re-close
+      this plan; commit
 
 ## Success criteria
 
@@ -135,6 +148,70 @@ Feature: Panel reachability
     And the response is Filament's login form
 ```
 
+### Subtask 11: the live database carries the new rules
+```gherkin
+Feature: FK delete rules on the live database
+
+  Scenario: information_schema reports the remediated rules
+    Given the MySQL container is healthy
+    When `REFERENTIAL_CONSTRAINTS` is queried for schema `personal_finances`
+    Then `fk_transactions_account` reports `RESTRICT`
+    And `fk_transactions_category` reports `SET NULL`
+    And `fk_budgets_category` reports `RESTRICT`
+    And the four `fk_*_user` constraints still report `CASCADE` (finding 2, untouched)
+    And `fk_categories_parent` still reports `SET NULL`
+
+  Scenario: only the column nullability changes
+    Given the `transactions` table
+    When `information_schema.COLUMNS` is queried
+    Then `category_id` is `IS_NULLABLE = YES` and no other column changed nullability
+```
+
+### Subtask 12: deletes behave as intended
+```gherkin
+Feature: Hard-delete behaviour
+
+  Scenario: An account with transactions cannot be hard-deleted
+    Given a test account with one test transaction
+    When `DELETE FROM accounts WHERE id = <test>` runs
+    Then it fails (RESTRICT)
+    And the account and the transaction both still exist
+
+  Scenario: A category without budgets detaches its transactions
+    Given a test category with one test transaction and no budgets
+    When `DELETE FROM categories WHERE id = <test>` runs
+    Then it succeeds
+    And the test transaction survives with `category_id = NULL`
+
+  Scenario: A category with budgets cannot be hard-deleted
+    Given a test category with one test budget
+    When `DELETE FROM categories WHERE id = <test>` runs
+    Then it fails (RESTRICT)
+
+  Scenario: Nothing is left behind
+    Given all test rows created by these scenarios
+    When they are deleted explicitly
+    Then `accounts`, `categories`, `transactions` and `budgets` all report 0 rows
+    And `users` still reports exactly 1 row (the admin)
+```
+
+### Subtask 13: a fresh import matches the live rules
+```gherkin
+Feature: Script and database stay in sync
+
+  Scenario: The scratch import produces the same delete rules
+    Given a scratch database created only for this check
+    When the updated `database/schema/01-personal-finances.sql` is imported into it
+    Then the import exits 0
+    And the set of `(TABLE_NAME, CONSTRAINT_NAME, DELETE_RULE)` equals the live database's set
+    And `transactions.category_id` is nullable there too
+
+  Scenario: The scratch database is removed
+    Given the check finished
+    When the scratch database is dropped
+    Then only `personal_finances` (plus MySQL's system schemas) remain
+```
+
 ## Verification evidence (2026-09-22)
 
 | Check | Command | Observed |
@@ -171,6 +248,26 @@ mounted) — the host PHP (now 8.5.1) still has no `intl`/`pdo_mysql`.
 The `pf-serve` container was removed after the check; only `mysql` and `adminer` remain running.
 Environment quirk worth remembering: `tinker --execute` inside the container needs `HOME=/tmp`,
 otherwise psysh fails with `Writing to directory /.config/psysh is not allowed`.
+
+## Finding 1 remediation evidence (2026-09-23)
+
+| Check | Command | Observed |
+|---|---|---|
+| FK changes applied | 7 `ALTER TABLE` statements (drop 3 FKs, modify 1 column, re-add 3 FKs) | `ALTER_EXIT=0` |
+| New delete rules | `information_schema.REFERENTIAL_CONSTRAINTS` | `fk_transactions_account` → `RESTRICT`, `fk_transactions_category` → `SET NULL`, `fk_budgets_category` → `RESTRICT`; the four `fk_*_user` still `CASCADE`; `fk_categories_parent` still `SET NULL` |
+| Column nullability | `information_schema.COLUMNS` on `transactions` | `category_id` → `IS_NULLABLE = YES` (only column that changed) |
+| T1: account with transaction cannot be hard-deleted | `DELETE FROM accounts WHERE name='__FK_TEST_ACC'` | `ERROR 1451 … ON DELETE RESTRICT`, exit 1; account **and** transaction both still present afterwards |
+| T2: category without budgets detaches its transactions | `DELETE FROM categories WHERE name='__FK_TEST_CAT_A'` | exit 0; category gone, **transaction survived with `category_id = NULL`** |
+| T3: category with budgets cannot be hard-deleted | `DELETE FROM categories WHERE name='__FK_TEST_CAT_B'` | `ERROR 1451 … ON DELETE RESTRICT`, exit 1; category and budget both still present |
+| Cleanup | explicit `DELETE`s of the `__FK_TEST_*` marker rows | `users=1, accounts=0, categories=0, transactions=0, budgets=0` |
+| Script updated | `database/schema/01-personal-finances.sql` | header documents the semantic change (D19); `transactions.category_id` nullable; the three FK lines now `RESTRICT`/`SET NULL`/`RESTRICT`; `budgets.category_id` stays `NOT NULL`; `fk_*_user` untouched |
+| Fresh import matches live | create `pf_scratch_fkcheck`, import updated script, `diff` sorted `(table, constraint, rule)` against live | import exit 0, **`DIFF_EXIT=0`** (all 8 rules identical), scratch `category_id` nullable |
+| Scratch removed | `DROP DATABASE pf_scratch_fkcheck` | exit 0; `SHOW DATABASES` → only `personal_finances` + MySQL system schemas |
+
+Test rows were created with `__FK_TEST_*` markers and explicit values in otherwise-empty tables,
+then deleted in the same session — domain tables were verified back at 0 rows (the `users` admin
+row untouched). No application code changed; `pint`/tests were not re-run for DDL-only work (the
+suite runs on in-memory sqlite and never sees these tables).
 
 ## Decisions log
 
@@ -242,9 +339,39 @@ otherwise psysh fails with `Writing to directory /.config/psysh is not allowed`.
   `.env.example` and the seeder then fails with a message naming the three missing variables.
 - **Reversibility:** easy; one line each in `.env.example` whenever it is wanted.
 
+### D19: the three financial-history FKs stop cascading (finding 1)
+- **Context:** finding 1 showed a hard `DELETE` on an account or category silently destroyed
+  transaction history; `budgets` cascaded on `category_id` too. Eloquent's soft delete on
+  `accounts`/`transactions` does not protect raw SQL, `forceDelete()`, or future admin actions.
+- **Options considered:** keep `CASCADE` (status quo, data loss stays silent); translate the fix
+  into different delete rules per FK; drop soft deletes and enforce policy only in application code
+  (the domain tables are owned by an imported script, not migrations — application-only policy
+  would not bind raw SQL either).
+- **Decision:** `fk_transactions_account` → `RESTRICT` (the account row stays as the reason a
+  transaction cannot be hard-deleted); `fk_transactions_category` → `SET NULL` with
+  `transactions.category_id` made nullable (history survives uncategorized); `budgets.category_id`
+  stays `NOT NULL` and `fk_budgets_category` → `RESTRICT` (`SET NULL` would produce category-less
+  budgets and weaken `uq_user_category_period`, since MySQL UNIQUE allows repeated NULLs). Applied
+  to the live database **and** to `database/schema/01-personal-finances.sql` so a fresh import
+  matches (D13/D15's source-of-truth rule, with the semantic change recorded in the file header —
+  the "no semantic changes" claim of D15 is now historical, not current).
+- **Reason:** matches exactly what finding 1 proposed and what the person approved; keeps every
+  write path (including raw SQL) safe, not just Eloquent's.
+- **Out of scope, still pending:** the four `fk_*_user` cascades and the soft-delete policy
+  inconsistency (finding 2) — a user hard-delete still cascades accounts → transactions, categories
+  and budgets, now *stopped* mid-way by `fk_transactions_account` RESTRICT only if accounts are
+  deleted while transactions exist (the user-level cascade deletes transactions first via
+  `fk_transactions_user`). Needs its own decision.
+- **Reversibility:** easy — the original `CASCADE` lines are in git history and the constraints can
+  be swapped back with the same `ALTER` pattern; costly only once real financial data exists.
+
 ## Findings raised for a decision (nothing changed in the script)
 
-1. **`ON DELETE CASCADE` on financial history — the one worth a decision now.** `fk_transactions_account`
+1. **`ON DELETE CASCADE` on financial history — RESOLVED 2026-09-23 (D19, subtasks 11–14).**
+   `fk_transactions_account` is now `RESTRICT`, `fk_transactions_category` is `SET NULL`
+   (`category_id` nullable) and `fk_budgets_category` is `RESTRICT`; verified live (functional
+   delete tests) and via a scratch re-import (`DIFF_EXIT=0`). Superseded ALTER snippets from the
+   original proposal:
    and `fk_transactions_category` cascade, so a hard `DELETE` on an account or a category deletes its
    transactions. `accounts` and `transactions` do have `deleted_at`, so Eloquent's normal `delete()` is
    safe — but `forceDelete()`, a raw `DELETE`, or any future admin action bypasses that and the loss is
