@@ -1,7 +1,7 @@
 # SQL schema import + Filament panel (steps 3–4)
 
 ## Status
-`in-progress` — step 3 in progress, step 4 not started
+`complete` — step 3 (schema import) and step 4 (Filament panel + admin user) both verified
 
 ## Context
 The application (Laravel 13.33.0 at the repository root) is connected to the MySQL 8.4.11 container,
@@ -27,6 +27,14 @@ no-op; running the script first would instead make `Schema::create('users')` fai
 - [x] 3. Import the supplied script into `personal_finances`
 - [x] 4. Verify the result: table list, foreign keys, indexes, charset/collation, per-table row counts
 - [x] 5. Report step 3 with evidence, plus the design findings raised for a decision
+
+Step 4 (Filament panel + admin user):
+
+- [x] 6. Install `filament/filament` with Composer **inside `pf-php:8.4-dev`** (host PHP has no `ext-intl`)
+- [x] 7. Create the panel with `php artisan filament:install --panels` (path `/admin`) and publish its assets
+- [x] 8. Create `AdminUserSeeder` (credentials from `FILAMENT_ADMIN_*` env vars, never hardcoded) and run it
+- [x] 9. Verify end to end: dependency present, panel routes, login page serves, admin row hashes correctly
+- [x] 10. Document: `docs/CHANGELOG.md` entry, close this plan, update `/plans/_index.md`; commit
 
 ## Success criteria
 
@@ -83,6 +91,50 @@ Feature: Imported schema
     Then all three are `decimal(12,2)`
 ```
 
+### Subtasks 6–7: Filament is installed and the panel exists
+```gherkin
+Feature: Filament panel
+
+  Scenario: The package is a dependency
+    Given `composer.json`
+    When it is inspected
+    Then `filament/filament` is listed under `require`
+
+  Scenario: The panel is registered at the default path
+    Given the install ran inside `pf-php:8.4-dev`
+    When `php artisan route:list --path=admin` runs
+    Then Filament's routes for the panel are listed under `/admin`
+```
+
+### Subtask 8: the admin user is reproducible
+```gherkin
+Feature: Admin user seeder
+
+  Scenario: Seeding creates the admin
+    Given `.env` defines `FILAMENT_ADMIN_NAME`, `FILAMENT_ADMIN_EMAIL` and `FILAMENT_ADMIN_PASSWORD`
+    When `php artisan db:seed --class=AdminUserSeeder --force` runs in the verification image
+      with host networking
+    Then it exits 0
+    And a `users` row exists with the configured email
+    And its stored `password` verifies against the configured plaintext (hashed cast)
+
+  Scenario: Seeding twice does not duplicate
+    Given the row already exists
+    When the seeder runs again
+    Then the `users` row count for that email is unchanged
+```
+
+### Subtask 9: the panel serves its login page
+```gherkin
+Feature: Panel reachability
+
+  Scenario: The login page responds
+    Given `php artisan serve` running in the verification image with host networking
+    When `curl` requests `http://127.0.0.1:8000/admin/login`
+    Then it returns `200`
+    And the response is Filament's login form
+```
+
 ## Verification evidence (2026-09-22)
 
 | Check | Command | Observed |
@@ -99,6 +151,26 @@ Feature: Imported schema
 | Money precision | `information_schema.COLUMNS.COLUMN_TYPE` | `accounts.balance`, `transactions.amount`, `budgets.amount` all `decimal(12,2)` — no float |
 | Idempotency | script applied a second time | `exit=0`, table count still `13` |
 | Laravel sees the result | `php artisan db:show` | `Tables: 13`, `Total Size: 336.00 KB` |
+
+## Step 4 verification evidence (2026-09-23)
+
+All artisan/composer commands ran in `pf-php:8.4-dev` (`--user 1000:1000 --network host`, workspace
+mounted) — the host PHP (now 8.5.1) still has no `intl`/`pdo_mysql`.
+
+| Check | Command | Observed |
+|---|---|---|
+| Dependency installed | `composer require filament/filament` | `EXIT=0`; `filament/filament: ^5.8` (resolved **v5.8.4**) + 32 transitive packages (Livewire **v4.4.6**), lock file written, no security advisories |
+| Panel created | `php artisan filament:install --panels --no-interaction` | `EXIT=0`; `app/Providers/Filament/AdminPanelProvider.php` created, registered in `bootstrap/providers.php`, assets published, `.gitignore` gained `/public/js/filament`, `/public/css/filament`, `/public/fonts/filament` |
+| Panel is the default at `/admin` | `php artisan route:list --path=admin` | 3 routes: `GET admin` (dashboard), `GET admin/login`, `POST admin/logout` |
+| Seeder runs | `php artisan db:seed --class=AdminUserSeeder --force` ×2 | both `EXIT=0` (622 ms, 268 ms) |
+| Admin row + idempotency + hash | `tinker --execute` counting rows and `Hash::check` | `count=1`, `name=Admin`, `hash_ok=yes`, `total_users=1` — second run created no duplicate |
+| Login page serves | `php artisan serve` in the container + `curl http://127.0.0.1:8000/admin/login` | `HTTP=200`, `<title>Login - Laravel</title>`, Filament `v5.8.4.0` CSS/JS and Livewire scripts present in the HTML |
+| Code style | `vendor/bin/pint --dirty --test` | `PASS` — 4 files, exit 0 |
+| Test suite | `php artisan test` | `2 passed` (2 assertions), exit 0 |
+
+The `pf-serve` container was removed after the check; only `mysql` and `adminer` remain running.
+Environment quirk worth remembering: `tinker --execute` inside the container needs `HOME=/tmp`,
+otherwise psysh fails with `Writing to directory /.config/psysh is not allowed`.
 
 ## Decisions log
 
@@ -140,6 +212,36 @@ Feature: Imported schema
   only comments were added — say the word and the header comes out.
 - **Reversibility:** easy.
 
+### D16: panel stays at Filament's default `/admin`, unrestricted by email
+- **Context:** step 4 had to pick a panel path and whether to gate access to one email/role.
+- **Options considered:** default `/admin` vs a custom path; `canAccessPanel()` restriction vs open to
+  any authenticated user.
+- **Decision:** `/admin` (Filament's default, `->login()` enabled), no email/role restriction yet —
+  the application currently has exactly one user (the seeded admin), so a restriction would be
+  dead logic until a second kind of user exists.
+- **Reason:** the restriction becomes a real requirement the moment another user is created; adding it
+  now would guess at a policy (which email? which role?) nobody has defined.
+- **Reversibility:** easy — one method on `AdminPanelProvider`.
+
+### D17: admin user via `AdminUserSeeder` + `config/filament-admin.php`, not `make:filament-user`
+- **Context:** `php artisan make:filament-user` is interactive and puts the password in shell history.
+- **Options considered:** pipe answers into `make:filament-user`; a seeder reading `env()` directly;
+  a seeder reading env through a config file.
+- **Decision:** `database/seeders/AdminUserSeeder.php` + `config/filament-admin.php` exposing
+  `FILAMENT_ADMIN_NAME` / `FILAMENT_ADMIN_EMAIL` / `FILAMENT_ADMIN_PASSWORD`; the seeder fails
+  explicitly (naming the missing variables) if any is absent, and is idempotent by email.
+- **Reason:** reproducible from a fresh clone, password never typed into history or code
+  (`base/03` rule 2), and `env()` outside config files returns `null` under `config:cache` — the
+  config file is the stack's standard loading path.
+- **Reversibility:** easy.
+
+### D18: `.env.example` left untouched again (consistent with D12)
+- **Context:** the new `FILAMENT_ADMIN_*` variables exist only in the untracked `.env`.
+- **Decision:** no `.env.example` edit — the previous decision (D12) limited that file's changes to
+  what was explicitly requested, and the pattern repeats. Consequence: a fresh clone copies
+  `.env.example` and the seeder then fails with a message naming the three missing variables.
+- **Reversibility:** easy; one line each in `.env.example` whenever it is wanted.
+
 ## Findings raised for a decision (nothing changed in the script)
 
 1. **`ON DELETE CASCADE` on financial history — the one worth a decision now.** `fk_transactions_account`
@@ -180,12 +282,13 @@ Feature: Imported schema
 8. **No transfer concept.** Nothing models money moving between two accounts; today that would be two
    unlinked transactions. Not a defect — just the next schema decision whenever transfers are wanted.
 
-## Step 4 readiness (not started)
+## Step 4 readiness → executed
+
+All three points below were resolved during execution and are recorded as **D16** (path/restriction),
+**D17** (seeder instead of interactive `make:filament-user`) and the evidence table at the top:
 
 - `filament/filament` **5.8.4** requires `ext-intl`; the host PHP lacks it, so `composer require` and
-  `php artisan filament:*` must run through `pf-php:8.4-dev` (which has `intl`), not the host.
-- `php artisan make:filament-user` is interactive (name, email, password). Two clean options: pipe the
-  answers in, or add a seeder (`database/seeders/AdminUserSeeder.php`) so the admin user is reproducible
-  and its password comes from the environment instead of shell history.
-- Also to decide then: panel path (`/admin` is Filament's default) and whether the panel should be
-  restricted to a particular email/role.
+  `php artisan filament:*` **did** run through `pf-php:8.4-dev` (which has `intl`), not the host.
+- The admin user is a seeder (`database/seeders/AdminUserSeeder.php`) so it is reproducible and its
+  password comes from the environment instead of shell history.
+- Panel path: `/admin` (Filament's default); no email/role restriction yet — see D16.

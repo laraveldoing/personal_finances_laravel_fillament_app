@@ -83,3 +83,31 @@
   `/plans/laravel-app-bootstrap.md`.
 - **Open items:** SQL schema import and the Filament panel (steps 3–4 of the request) are not started;
   tracked as a `pending` row in `/plans/_index.md`.
+
+## [2026-09-23]
+
+### Filament admin panel and reproducible admin user (step 4)
+- **Modules affected:** `composer.json`/`composer.lock` (+33 packages), `app/Providers/Filament/`
+  (new `AdminPanelProvider`), `bootstrap/providers.php` (provider registered), `config/
+  filament-admin.php` (new), `database/seeders/AdminUserSeeder.php` (new), `.env` (3 untracked
+  `FILAMENT_ADMIN_*` dev variables), `.gitignore` (published Filament assets ignored).
+- **Implementation:** `filament/filament` **v5.8.4** (with Livewire v4.4.6) installed via Composer
+  **inside the `pf-php:8.4-dev` verification image** — host PHP 8.5.1 still lacks `ext-intl`.
+  `php artisan filament:install --panels` created the default `AdminPanelProvider` at `/admin`
+  (login enabled) and registered it in `bootstrap/providers.php`; its published assets live under
+  `public/{js,css,fonts}/filament` and are git-ignored. The admin user is created by
+  `AdminUserSeeder`, idempotent by email, reading `FILAMENT_ADMIN_NAME`/`FILAMENT_ADMIN_EMAIL`/
+  `FILAMENT_ADMIN_PASSWORD` through the new `config/filament-admin.php` and failing with the names
+  of any missing variables.
+- **Technical decisions:** default `/admin` path with no email/role restriction until a second user
+  type exists (D16); seeder + config file instead of interactive `make:filament-user` so the password
+  comes from the environment and is reproducible (D17); `.env.example` left untouched again, so a
+  fresh clone surfaces the three variables through the seeder's explicit error (D18). Full reasoning
+  in `/plans/schema-import-and-filament.md`.
+- **Verified:** `composer require` exit 0; `route:list --path=admin` shows `admin`, `admin/login`,
+  `admin/logout`; seeder run twice → `count=1`, `hash_ok=yes`, `total_users=1`; `GET /admin/login`
+  returns `200` with Filament 5.8.4 assets and Livewire scripts; `pint --dirty --test` PASS (4
+  files); `php artisan test` 2 passed. Evidence table in `/plans/schema-import-and-filament.md`.
+- **Open items:** the step-3 schema findings still await a decision (first: `ON DELETE CASCADE` on
+  financial history); Laravel Boost is still not installed (`AGENTS.md` untouched — installing it
+  regenerates that file, which requires explicit approval).
