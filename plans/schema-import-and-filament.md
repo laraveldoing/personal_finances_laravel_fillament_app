@@ -1,7 +1,7 @@
 # SQL schema import + Filament panel (steps 3–4)
 
 ## Status
-`complete` — steps 3–4 verified; finding 1 (`ON DELETE CASCADE` on financial history) remediated and verified (subtasks 11–14)
+`complete` — steps 3–4 verified; finding 1 (`ON DELETE CASCADE` on financial history) remediated and verified (subtasks 11–14); finding 2 (`fk_*_user` cascades + soft-delete policy) resolved afterwards as D20 in `/plans/user-delete-policy.md` (2026-09-25)
 
 ## Context
 The application (Laravel 13.33.0 at the repository root) is connected to the MySQL 8.4.11 container,
@@ -357,11 +357,11 @@ suite runs on in-memory sqlite and never sees these tables).
   the "no semantic changes" claim of D15 is now historical, not current).
 - **Reason:** matches exactly what finding 1 proposed and what the person approved; keeps every
   write path (including raw SQL) safe, not just Eloquent's.
-- **Out of scope, still pending:** the four `fk_*_user` cascades and the soft-delete policy
-  inconsistency (finding 2) — a user hard-delete still cascades accounts → transactions, categories
-  and budgets, now *stopped* mid-way by `fk_transactions_account` RESTRICT only if accounts are
-  deleted while transactions exist (the user-level cascade deletes transactions first via
-  `fk_transactions_user`). Needs its own decision.
+- **Out of scope then, resolved since:** the four `fk_*_user` cascades and the soft-delete policy
+  inconsistency (finding 2). At the time, a user hard-delete still cascaded accounts → transactions,
+  categories and budgets, and `fk_transactions_account` RESTRICT did not stop it — the user-level
+  cascade deleted the transactions first via `fk_transactions_user`. **Resolved 2026-09-25 by D20 in
+  `/plans/user-delete-policy.md`:** the four cascades became `RESTRICT` and `users` soft-deletes.
 - **Reversibility:** easy — the original `CASCADE` lines are in git history and the constraints can
   be swapped back with the same `ALTER` pattern; costly only once real financial data exists.
 
@@ -387,11 +387,16 @@ suite runs on in-memory sqlite and never sees these tables).
    ALTER TABLE `transactions` ADD CONSTRAINT `fk_transactions_category`
      FOREIGN KEY (`category_id`) REFERENCES `categories` (`id`) ON DELETE SET NULL;
    ```
-2. **Soft-delete policy is inconsistent.** `accounts` and `transactions` have `deleted_at`; `categories`
-   and `budgets` do not, and neither does `users`. Combined with finding 1, deleting a user hard-cascades
-   accounts → transactions, categories and budgets, and `App\Models\User` does not use the `SoftDeletes`
-   trait, so nothing in the application currently prevents it. A one-line policy decision (soft deletes
-   for users/categories, or `RESTRICT` wherever history hangs off a row) closes it.
+2. **Soft-delete policy is inconsistent — RESOLVED 2026-09-25 (finding 2 closed by D20 in
+   `/plans/user-delete-policy.md`).** `users` gained `deleted_at` (new migration) and `SoftDeletes`
+   on `App\Models\User`; the four `fk_*_user` cascades became `RESTRICT`, so a hard `DELETE` on a
+   user can no longer destroy accounts, transactions, categories or budgets — not even by raw SQL.
+   The original text of the finding, kept as the historical record of what was wrong:
+   > `accounts` and `transactions` have `deleted_at`; `categories` and `budgets` do not, and neither
+   > does `users`. Combined with finding 1, deleting a user hard-cascaded accounts → transactions,
+   > categories and budgets, and `App\Models\User` did not use the `SoftDeletes` trait, so nothing in
+   > the application prevented it. A one-line policy decision (soft deletes for users/categories, or
+   > `RESTRICT` wherever history hangs off a row) closes it.
 3. **`status ENUM('completed','pending','cancelled')`.** Works and enforces values in the database, but
    every new status needs an `ALTER TABLE`, and Laravel/Filament are happier casting a `VARCHAR` to a PHP
    enum. A trade-off to keep or drop, not an error.

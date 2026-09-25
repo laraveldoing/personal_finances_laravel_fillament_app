@@ -111,3 +111,39 @@
 - **Open items:** findings 2–8 unchanged — the `fk_*_user` cascades mean a user hard-delete still
   destroys history (finding 2, needs a policy decision); enum-vs-varchar status, `month`/`year`
   range checks, `amount` sign convention and the missing transfer concept remain open.
+
+## [2026-09-25]
+
+### User delete policy: soft deletes plus `RESTRICT` on the four user foreign keys (finding 2)
+- **Modules affected:** `database/schema/01-personal-finances.sql` (4 FK definitions, header and a
+  note on `users`), a new migration `2026_09_25_000000_add_deleted_at_to_users_table`,
+  `app/Models/User.php` (`SoftDeletes`), `database/seeders/AdminUserSeeder.php` (trashed-row
+  handling), `tests/Feature/UserSoftDeleteTest.php` (new) and the live `personal_finances` database
+  (the same 4 constraints via `ALTER TABLE`).
+- **Implementation:** `fk_accounts_user`, `fk_categories_user`, `fk_transactions_user` and
+  `fk_budgets_user` changed from `ON DELETE CASCADE` to `ON DELETE RESTRICT`. `users` gained
+  `deleted_at` through a migration rather than the script (`users` belongs to the framework's
+  migrations; the script's block stays an `IF NOT EXISTS` no-op), and `App\Models\User` now soft
+  deletes. `AdminUserSeeder` looks the admin up with `withTrashed()` and restores a trashed row
+  instead of colliding with the unique index on `email`.
+- **Technical decisions:** option A of `/plans/user-delete-policy.md`, recorded there as **D20** —
+  the only rule that binds every write path (raw SQL included), matching D19's reasoning, at the
+  cost of one migration and one extra piece of work. Options B (keep the cascades, soft-delete
+  users only) and C (uniform soft deletes on `categories`/`budgets` as well) were rejected as
+  weaker or inconsistent for the same or more work; D (document only) was rejected because the
+  delete paths are about to be built. An explicit purge path is a deliberate, documented gap: until
+  it exists, no user is hard-deleted, which is the intended behaviour.
+- **Verified:** live `information_schema.REFERENTIAL_CONSTRAINTS` reports `RESTRICT` for the four
+  `fk_*_user` (D19's three unchanged); `DELETE FROM users` for a user holding an account, category,
+  transaction and budget fails with **error 1451** and all four domain tables keep their rows; an
+  Eloquent soft delete on the live database reports `trashed=yes`, `find_after_delete=null`,
+  `with_trashed_count=1` with the history intact; a scratch database (created with `root` inside
+  the container, temporary grant, both revoked and dropped afterwards) migrated and imported the
+  updated script to an identical `(table, constraint, delete_rule)` set (`DIFF_EXIT=0`), the script
+  re-importing cleanly; `php artisan test` 5 passed / 10 assertions (3 new tests);
+  `vendor/bin/pint --dirty --test` PASS (4 files); test rows removed (domain tables back to 0 rows).
+- **Open items:** findings 3–8 of `/plans/schema-import-and-filament.md` remain (enum-vs-varchar
+  `status`, `month`/`year` range checks, `amount` sign convention, the missing transfer concept,
+  `SET FOREIGN_KEY_CHECKS = 0`, the singular/plural database name). No explicit purge path exists —
+  by decision, not by oversight.
+

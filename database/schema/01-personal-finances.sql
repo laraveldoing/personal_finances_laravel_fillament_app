@@ -8,8 +8,15 @@
 -- Cambio de semántica (2026-09-23, decisión D19 en `/plans/schema-import-and-filament.md`): las
 -- reglas `ON DELETE` de tres claves foráneas dejaron de ser `CASCADE` para proteger el historial
 -- financiero — `fk_transactions_account` → `RESTRICT`, `fk_transactions_category` → `SET NULL`
--- (por eso `transactions.category_id` es NULL) y `fk_budgets_category` → `RESTRICT`. Los cascades
--- sobre `users` (`fk_*_user`) se mantienen: su política sigue pendiente (finding 2 del plan).
+-- (por eso `transactions.category_id` es NULL) y `fk_budgets_category` → `RESTRICT`.
+--
+-- Cambio de semántica (2026-09-25, decisión D20 en `/plans/user-delete-policy.md`): los cuatro
+-- `fk_*_user` dejaron de ser `CASCADE` y pasaron a `RESTRICT`, así que un borrado duro de `users`
+-- ya no puede destruir el historial financiero del usuario — tampoco por SQL directo. La operación
+-- soportada pasa a ser el borrado lógico (SoftDeletes): la columna `users.deleted_at` la añade la
+-- migración `2026_09_25_000000_add_deleted_at_to_users_table`, no este script, porque `users`
+-- pertenece a las migraciones del framework. Un purgado real exige un camino explícito que borre
+-- en orden de dependencias; eso queda como hueco documentado, no accidental.
 --
 -- Orden de aplicación: primero `php artisan migrate` (crea las tablas del framework: `migrations`,
 -- `sessions`, `cache`, `cache_locks`, `jobs`, `job_batches`, `failed_jobs`, `password_reset_tokens`
@@ -26,6 +33,9 @@
 SET FOREIGN_KEY_CHECKS = 0;
 
 -- 1. Tabla de Usuarios (Compatible con el sistema de autenticación de Laravel)
+-- Nota (D20): la columna `deleted_at` del borrado lógico la añade la migración
+-- `2026_09_25_000000_add_deleted_at_to_users_table`, no se declara aquí porque este bloque sólo
+-- actúa como no-op sobre la tabla que ya crearon las migraciones (`IF NOT EXISTS`).
 CREATE TABLE IF NOT EXISTS `users` (
   `id` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   `name` VARCHAR(255) NOT NULL,
@@ -49,7 +59,7 @@ CREATE TABLE IF NOT EXISTS `accounts` (
   `created_at` TIMESTAMP NULL,
   `updated_at` TIMESTAMP NULL,
   `deleted_at` TIMESTAMP NULL,
-  CONSTRAINT `fk_accounts_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+  CONSTRAINT `fk_accounts_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE RESTRICT -- D20: la cuenta impide el borrado duro del usuario
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 3. Categorías de Gastos/Ingresos (Soporta jerarquía con parent_id para subcategorías)
@@ -63,7 +73,7 @@ CREATE TABLE IF NOT EXISTS `categories` (
   `icon` VARCHAR(100) NULL, -- Nombre del icono compatible (ej. Heroicons)
   `created_at` TIMESTAMP NULL,
   `updated_at` TIMESTAMP NULL,
-  CONSTRAINT `fk_categories_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_categories_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE RESTRICT, -- D20: igual que `fk_accounts_user` (sólo afecta a categorías propias; `user_id` NULL = global)
   CONSTRAINT `fk_categories_parent` FOREIGN KEY (`parent_id`) REFERENCES `categories` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -82,7 +92,7 @@ CREATE TABLE IF NOT EXISTS `transactions` (
   `created_at` TIMESTAMP NULL,
   `updated_at` TIMESTAMP NULL,
   `deleted_at` TIMESTAMP NULL,
-  CONSTRAINT `fk_transactions_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_transactions_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE RESTRICT, -- D20: un borrado duro del usuario se rechaza mientras existan sus transacciones
   CONSTRAINT `fk_transactions_account` FOREIGN KEY (`account_id`) REFERENCES `accounts` (`id`) ON DELETE RESTRICT, -- protege el historial: no se puede borrar una cuenta con transacciones (D19)
   CONSTRAINT `fk_transactions_category` FOREIGN KEY (`category_id`) REFERENCES `categories` (`id`) ON DELETE SET NULL, -- la transacción queda sin categoría en vez de borrarse (D19)
   -- Índices estratégicos para acelerar consultas, reportes y filtros del panel de Filament
@@ -100,7 +110,7 @@ CREATE TABLE IF NOT EXISTS `budgets` (
   `year` SMALLINT UNSIGNED NOT NULL,  -- Ej: 2026
   `created_at` TIMESTAMP NULL,
   `updated_at` TIMESTAMP NULL,
-  CONSTRAINT `fk_budgets_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_budgets_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE RESTRICT, -- D20: igual que las otras tres
   CONSTRAINT `fk_budgets_category` FOREIGN KEY (`category_id`) REFERENCES `categories` (`id`) ON DELETE RESTRICT, -- un presupuesto sin categoría no existe; y `uq_user_category_period` incluye `category_id` (D19)
   -- Restricción única para evitar duplicar el presupuesto de la misma categoría en un mismo mes/año por usuario
   CONSTRAINT `uq_user_category_period` UNIQUE (`user_id`, `category_id`, `month`, `year`)
