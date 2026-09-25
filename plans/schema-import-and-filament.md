@@ -400,19 +400,30 @@ suite runs on in-memory sqlite and never sees these tables).
 3. **`status ENUM('completed','pending','cancelled')`.** Works and enforces values in the database, but
    every new status needs an `ALTER TABLE`, and Laravel/Filament are happier casting a `VARCHAR` to a PHP
    enum. A trade-off to keep or drop, not an error.
+   **Resolved 2026-09-25 (D21 in `/plans/schema-findings-3-8.md`):** converted to
+   `VARCHAR(20) NOT NULL DEFAULT 'completed'`, with `App\Enums\TransactionStatus` holding the list.
 4. **`SET FOREIGN_KEY_CHECKS = 0` is unnecessary here.** The tables are created in dependency order and
    there are no cycles; it also removes protection if the script aborts midway for any other reason.
+   **Resolved 2026-09-25 (D22):** both statements deleted; the scratch import succeeds without them.
 5. **`month`/`year` have no range check.** `TINYINT UNSIGNED` accepts `0..255`, so `month = 13` is
    storable. Either a `CHECK` constraint or Filament-level validation (`min:1|max:12`), the latter
    belonging to step 4.
+   **Resolved 2026-09-25 (D23):** `CHECK` constraints added — `chk_budgets_month` and
+   `chk_budgets_year` — live and in the script.
 6. **Sign convention for `amount` is undefined.** `transactions.amount` is `NOT NULL` with no `CHECK`; if
    income/expense is derived from `categories.type`, a negative amount can still be stored. Worth pinning
    down before the Filament form is generated.
+   **Resolved 2026-09-25 (D24):** signed amounts documented (positive = income, negative = expense)
+   plus `chk_transactions_amount_not_zero`.
 7. **Naming:** the two commented lines at the top of the script say `personal_finance` (singular) while the
    container and `.env` use `personal_finances` (plural). They stay commented, and the header comment in
    `database/schema/01-personal-finances.sql` records the discrepancy.
+   **Resolved 2026-09-25 (D25):** the commented lines now use the plural name and the header note was
+   trimmed.
 8. **No transfer concept.** Nothing models money moving between two accounts; today that would be two
    unlinked transactions. Not a defect — just the next schema decision whenever transfers are wanted.
+   **Deferred 2026-09-25 (D26):** no schema change; the intended shape is recorded in
+   `/plans/schema-findings-3-8.md`.
 
 ## Step 4 readiness → executed
 

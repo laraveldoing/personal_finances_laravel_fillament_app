@@ -1,9 +1,9 @@
 -- Esquema de dominio de la aplicación de finanzas personales.
 --
 -- Origen: script entregado por la persona responsable del proyecto (2026-09-22). Se aplicó tal cual
--- sobre la base de datos `personal_finances` del contenedor MySQL definido en `docker-compose.yml`
--- (el nombre aparece en singular en las dos líneas comentadas de abajo: no se descomentan, la base
--- ya existe con el nombre en plural).
+-- sobre la base de datos `personal_finances` del contenedor MySQL definido en `docker-compose.yml`.
+-- Las dos líneas comentadas de abajo (creación y uso de la base) son opcionales y usan ya el nombre
+-- en plural (D25); no se descomentan porque la base ya existe con ese nombre.
 --
 -- Cambio de semántica (2026-09-23, decisión D19 en `/plans/schema-import-and-filament.md`): las
 -- reglas `ON DELETE` de tres claves foráneas dejaron de ser `CASCADE` para proteger el historial
@@ -18,6 +18,20 @@
 -- pertenece a las migraciones del framework. Un purgado real exige un camino explícito que borre
 -- en orden de dependencias; eso queda como hueco documentado, no accidental.
 --
+-- Convenciones fijadas (2026-09-25, decisiones D21–D24 en `/plans/schema-findings-3-8.md`):
+--   * `transactions.status` es `VARCHAR(20) NOT NULL DEFAULT 'completed'` (D21): la lista de valores
+--     (`completed`, `pending`, `cancelled`) vive en `App\Enums\TransactionStatus`, no en el esquema.
+--   * `budgets.month` está entre 1 y 12 y `budgets.year` entre 1900 y 2999 (D23, restricciones
+--     `chk_budgets_month` y `chk_budgets_year`).
+--   * `transactions.amount` lleva signo (D24): positivo = ingreso, negativo = gasto, nunca 0
+--     (restricción `chk_transactions_amount_not_zero`); `categories.type` clasifica la transacción,
+--     no decide su signo.
+--   * Las dos sentencias `SET FOREIGN_KEY_CHECKS` se eliminaron (D22): el orden de creación ya respeta
+--     las dependencias, y sin ellas un script aplicado en el orden equivocado falla en lugar de crear
+--     referencias colgantes.
+-- Las transferencias entre cuentas siguen sin esquema; su forma está registrada en ese mismo plan
+-- (D26).
+--
 -- Orden de aplicación: primero `php artisan migrate` (crea las tablas del framework: `migrations`,
 -- `sessions`, `cache`, `cache_locks`, `jobs`, `job_batches`, `failed_jobs`, `password_reset_tokens`
 -- y `users`), y después este script. La definición de `users` es idéntica a la de la migración
@@ -26,11 +40,8 @@
 -- Uso: docker compose exec -T mysql mysql -ularavel -ppassword personal_finances < database/schema/01-personal-finances.sql
 
 -- Creación de la base de datos (Opcional, descomenta si es necesario)
--- CREATE DATABASE IF NOT EXISTS personal_finance CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
--- USE personal_finance;
-
--- Desactivar temporalmente las verificaciones de claves foráneas para la creación limpia
-SET FOREIGN_KEY_CHECKS = 0;
+-- CREATE DATABASE IF NOT EXISTS personal_finances CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+-- USE personal_finances;
 
 -- 1. Tabla de Usuarios (Compatible con el sistema de autenticación de Laravel)
 -- Nota (D20): la columna `deleted_at` del borrado lógico la añade la migración
@@ -88,13 +99,14 @@ CREATE TABLE IF NOT EXISTS `transactions` (
   `payee` VARCHAR(255) NULL, -- Beneficiario o comercio donde se realizó el gasto
   `description` TEXT NULL,
   `receipt` VARCHAR(255) NULL, -- Ruta o referencia al comprobante adjunto
-  `status` ENUM('completed', 'pending', 'cancelled') NOT NULL DEFAULT 'completed',
+  `status` VARCHAR(20) NOT NULL DEFAULT 'completed', -- D21: la lista de valores vive en `App\Enums\TransactionStatus`
   `created_at` TIMESTAMP NULL,
   `updated_at` TIMESTAMP NULL,
   `deleted_at` TIMESTAMP NULL,
   CONSTRAINT `fk_transactions_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE RESTRICT, -- D20: un borrado duro del usuario se rechaza mientras existan sus transacciones
   CONSTRAINT `fk_transactions_account` FOREIGN KEY (`account_id`) REFERENCES `accounts` (`id`) ON DELETE RESTRICT, -- protege el historial: no se puede borrar una cuenta con transacciones (D19)
   CONSTRAINT `fk_transactions_category` FOREIGN KEY (`category_id`) REFERENCES `categories` (`id`) ON DELETE SET NULL, -- la transacción queda sin categoría en vez de borrarse (D19)
+  CONSTRAINT `chk_transactions_amount_not_zero` CHECK (`amount` <> 0), -- D24: el signo indica ingreso (+) o gasto (-); 0 no es un movimiento
   -- Índices estratégicos para acelerar consultas, reportes y filtros del panel de Filament
   INDEX `idx_user_trans_date` (`user_id`, `transaction_date`),
   INDEX `idx_category_trans_date` (`category_id`, `transaction_date`)
@@ -112,9 +124,8 @@ CREATE TABLE IF NOT EXISTS `budgets` (
   `updated_at` TIMESTAMP NULL,
   CONSTRAINT `fk_budgets_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE RESTRICT, -- D20: igual que las otras tres
   CONSTRAINT `fk_budgets_category` FOREIGN KEY (`category_id`) REFERENCES `categories` (`id`) ON DELETE RESTRICT, -- un presupuesto sin categoría no existe; y `uq_user_category_period` incluye `category_id` (D19)
+  CONSTRAINT `chk_budgets_month` CHECK (`month` BETWEEN 1 AND 12), -- D23: `TINYINT UNSIGNED` por sí solo aceptaría 13
+  CONSTRAINT `chk_budgets_year` CHECK (`year` BETWEEN 1900 AND 2999), -- D23
   -- Restricción única para evitar duplicar el presupuesto de la misma categoría en un mismo mes/año por usuario
   CONSTRAINT `uq_user_category_period` UNIQUE (`user_id`, `category_id`, `month`, `year`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Reactivar las verificaciones de claves foráneas
-SET FOREIGN_KEY_CHECKS = 1;

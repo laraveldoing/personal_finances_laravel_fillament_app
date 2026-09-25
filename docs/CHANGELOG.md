@@ -147,3 +147,35 @@
   `SET FOREIGN_KEY_CHECKS = 0`, the singular/plural database name). No explicit purge path exists —
   by decision, not by oversight.
 
+### Remaining schema findings settled (3–7) and transfers deferred (8)
+- **Modules affected:** `database/schema/01-personal-finances.sql` (`status` column, three `CHECK`
+  constraints, header, commented database lines, the two `SET FOREIGN_KEY_CHECKS` statements),
+  `app/Enums/TransactionStatus.php` (new), `tests/Unit/TransactionStatusTest.php` (new) and the live
+  `personal_finances` database (the column change and the three constraints).
+- **Implementation:** `transactions.status` is now `VARCHAR(20) NOT NULL DEFAULT 'completed'` with the
+  list living in `App\Enums\TransactionStatus`; `chk_budgets_month` (`month BETWEEN 1 AND 12`),
+  `chk_budgets_year` (`year BETWEEN 1900 AND 2999`) and `chk_transactions_amount_not_zero`
+  (`amount <> 0`) were added; both `SET FOREIGN_KEY_CHECKS` statements were deleted; the two commented
+  database lines use the plural `personal_finances`; the script header records the sign convention
+  (positive = income, negative = expense) and the enum's role as the list's home.
+- **Technical decisions:** findings 3–7 of `/plans/schema-import-and-filament.md`, recorded as
+  D21–D25 in `/plans/schema-findings-3-8.md`: the status list becomes application state (one case to
+  add, no `ALTER TABLE`), the range and sign rules live in the database so raw SQL is bound by them
+  too (the D19/D20 standard), and the FK toggles go because the creation order already satisfies the
+  dependencies. Accepted cost of D21: the database no longer rejects a status outside the list —
+  inserting `'refunded'` was verified to succeed, and the enum is what keeps the list honest.
+  Transfers (finding 8) stay unimplemented by decision **D26**, with their shape recorded in that
+  plan.
+- **Verified:** live `information_schema` reports `varchar(20)` for `transactions.status`, the three
+  `CHECK` clauses and all eight foreign keys unchanged (D19's `SET NULL`/`RESTRICT` and D20's four
+  `RESTRICT`); `month = 13`, `month = 0`, `year = 1899` and `amount = 0` inserts were refused with
+  **error 3819**, while `month = 12`, a negative amount and an omitted status (stored as
+  `completed`) all succeeded; the updated script — now without `SET FOREIGN_KEY_CHECKS` — migrated
+  into a scratch database and imported twice to a byte-identical structure query against the live
+  database (`DIFF_EXIT=0`, scratch database and its temporary grant removed); `php artisan test` 7
+  passed / 15 assertions (2 new enum tests) and `vendor/bin/pint --test` PASS; test rows removed
+  (domain tables back to 0 rows, `users` back to the single admin).
+- **Open items:** the transfer concept (finding 8, shape recorded as D26) and the domain models plus
+  Filament resources, which still do not exist — `App\Enums\TransactionStatus` is the first piece of
+  that work.
+
