@@ -60,30 +60,6 @@
 - **Open items:** SQL schema import and the Filament panel (steps 3–4 of the request) are not started;
   tracked as a `pending` row in `/plans/_index.md`.
 
-## [2026-09-22]
-
-### Laravel 13 application bootstrapped and connected to the container database
-- **Modules affected:** the repository gains an application (`app/`, `bootstrap/`, `config/`,
-  `database/`, `public/`, `resources/`, `routes/`, `storage/`, `tests/`, `artisan`, Composer manifests).
-  Local infrastructure is unchanged.
-- **Implementation:** `composer create-project "laravel/laravel:^13.0"` (resolved to v13.10.1, framework
-  v13.33.0) in a temporary directory, then copied into the repository root with
-  `rsync -a --ignore-existing`, so the guidelines library, `docker-compose.yml`, `README.md` and the
-  existing `.gitignore` were preserved. `.env` was configured for the container database:
-  `DB_CONNECTION=mysql`, `DB_HOST=127.0.0.1`, `DB_PORT=3306`, `DB_DATABASE=personal_finances`,
-  `DB_USERNAME=laravel`, plus the development password `docker-compose.yml` already documents.
-  `database/database.sqlite` was deliberately **not** carried over.
-- **Technical decisions:** scaffold-then-copy because the root was not empty (D10); verification through
-  a local, non-committed `pf-php:8.4-dev` image running as uid 1000, because host PHP has no
-  `pdo_mysql` (D11); `.env.example` left untouched, as the request named `.env` only (D12).
-- **Verified:** `php artisan db:show` reports MySQL `8.4.11`, connection `mysql`, database
-  `personal_finances`, host `127.0.0.1`, port `3306`, user `laravel`, 1 open connection and 0 tables —
-  the database is empty and ready for the schema import. `php artisan --version` reports
-  `Laravel Framework 13.33.0` from the repository root. Evidence tables in
-  `/plans/laravel-app-bootstrap.md`.
-- **Open items:** SQL schema import and the Filament panel (steps 3–4 of the request) are not started;
-  tracked as a `pending` row in `/plans/_index.md`.
-
 ## [2026-09-23]
 
 ### Filament admin panel and reproducible admin user (step 4)
