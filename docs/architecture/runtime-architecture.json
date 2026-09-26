@@ -1,0 +1,159 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Personal Finances Runtime Architecture",
+    "subtitle": "Laravel 13 + Filament v5 Host Application and Containerized MySQL/Adminer",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "app-flow",
+        "label": "Application request flow",
+        "focus": ["user", "host_app", "mysql_db"],
+        "note": "Web user interacting with the Filament Admin panel running on the host, persisting to MySQL 8.4."
+      },
+      {
+        "id": "adminer-flow",
+        "label": "DB management flow",
+        "focus": ["user", "adminer_ui", "mysql_db"],
+        "note": "Developer access to MySQL via Adminer web UI bound to loopback 127.0.0.1:8081."
+      },
+      {
+        "id": "full-runtime",
+        "label": "Full runtime architecture",
+        "focus": ["user", "host_app", "adminer_ui", "mysql_db", "mysql_vol"],
+        "note": "Complete overview of host runtime, Docker runtime boundaries, and persistent storage."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "user",
+      "type": "external",
+      "label": "Developer / Client",
+      "sublabel": "Browser (Web UI)",
+      "pos": [40, 240],
+      "size": [160, 80]
+    },
+    {
+      "id": "host_app",
+      "type": "backend",
+      "label": "Laravel 13 Application",
+      "sublabel": "Filament v5 & Livewire (:8000)",
+      "pos": [320, 130],
+      "size": [220, 80],
+      "tag": "Host Runtime"
+    },
+    {
+      "id": "adminer_ui",
+      "type": "frontend",
+      "label": "Adminer 6.0 Web UI",
+      "sublabel": "Docker Container (:8081)",
+      "pos": [320, 350],
+      "size": [220, 80],
+      "tag": "network_mode: host",
+      "brand": "docker"
+    },
+    {
+      "id": "mysql_db",
+      "type": "database",
+      "label": "MySQL 8.4 Server",
+      "sublabel": "Container (:3306)",
+      "pos": [680, 240],
+      "size": [200, 80],
+      "tag": "InnoDB / personal_finances",
+      "brand": "mysql"
+    },
+    {
+      "id": "mysql_vol",
+      "type": "database",
+      "label": "mysql-data Volume",
+      "sublabel": "Docker Named Volume",
+      "pos": [1000, 240],
+      "size": [180, 80],
+      "tag": "/var/lib/mysql"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Host Environment (Development Workspace - 127.0.0.1)",
+      "wraps": ["host_app", "adminer_ui", "mysql_db", "mysql_vol"]
+    },
+    {
+      "kind": "security-group",
+      "label": "Docker Container Runtime Boundary",
+      "wraps": ["adminer_ui", "mysql_db", "mysql_vol"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "conn_user_app",
+      "from": "user",
+      "to": "host_app",
+      "label": "HTTP :8000 (/admin)",
+      "variant": "emphasis"
+    },
+    {
+      "id": "conn_user_adminer",
+      "from": "user",
+      "to": "adminer_ui",
+      "label": "HTTP :8081",
+      "variant": "default"
+    },
+    {
+      "id": "conn_app_mysql",
+      "from": "host_app",
+      "to": "mysql_db",
+      "label": "TCP :3306 (PDO)",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "top"
+    },
+    {
+      "id": "conn_adminer_mysql",
+      "from": "adminer_ui",
+      "to": "mysql_db",
+      "label": "127.0.0.1:3306 (MySQLi)",
+      "variant": "default",
+      "fromSide": "right",
+      "toSide": "bottom"
+    },
+    {
+      "id": "conn_db_volume",
+      "from": "mysql_db",
+      "to": "mysql_vol",
+      "label": "Mount / Storage",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Application Core",
+      "items": [
+        "Laravel 13 runtime running directly on host",
+        "Filament v5 Admin Panel (Livewire / Alpine.js)",
+        "Domain models: Account, Category, Transaction, Budget"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Database & Tools",
+      "items": [
+        "MySQL 8.4 LTS in Docker container on loopback :3306",
+        "Persistent data stored in named volume mysql-data",
+        "Adminer 6.0 web database manager on loopback :8081"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Trust & Security Boundaries",
+      "items": [
+        "Localhost isolation: all ports bound strictly to 127.0.0.1",
+        "Adminer uses network_mode: host to reach MySQL on 127.0.0.1",
+        "Session authentication & CSRF protection on Filament /admin"
+      ]
+    }
+  ]
+}
