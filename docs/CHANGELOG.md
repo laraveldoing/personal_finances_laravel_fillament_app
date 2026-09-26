@@ -179,3 +179,46 @@
   Filament resources, which still do not exist — `App\Enums\TransactionStatus` is the first piece of
   that work.
 
+### Domain models and Filament resources for accounts, categories, transactions and budgets
+- **Modules affected:** `app/Models/Account.php`, `app/Models/Category.php`, `app/Models/Transaction.php`,
+  `app/Models/Budget.php` (all new), `app/Enums/AccountType.php`, `app/Enums/CategoryType.php` (both new),
+  `app/Filament/Resources/Accounts/*`, `app/Filament/Resources/Categories/*`,
+  `app/Filament/Resources/Transactions/*`, `app/Filament/Resources/Budgets/*` (all new),
+  `tests/Unit/AccountTypeTest.php`, `tests/Unit/CategoryTypeTest.php`,
+  `tests/Unit/DomainModelCastsTest.php` (all new).
+- **Implementation:**
+  - Four Eloquent models with relations, fillables and attribute casts (`SoftDeletes` on `Account` and
+    `Transaction`; `decimal:2` on amounts and balances; date casting on transactions; backed enum casts
+    on statuses and types).
+  - Two new string-backed enums: `AccountType` (`cash`, `bank`, `card`, `savings`) and `CategoryType`
+    (`income`, `expense`).
+  - Four Filament resources in `App\Filament\Resources` with navigation grouped under `Finances`.
+    Validation on every resource form mirrors the verified database rules: transaction status must match
+    the backed enum, amount must be non-zero, budget month 1–12, budget year 1900–2999, currency
+    3-letter ISO (auto-uppercased), account type matches its enum.
+  - Transactions form captures the amount as a positive number alongside an `expense`/`income` direction
+    select (default `expense`), applying the sign on save via `dehydrateStateUsing` (expenses stored
+    negatively per D24). The edit form rehydrates this for display via `mutateFormDataBeforeFill`.
+  - Single-owner model (D27): `mutateFormDataBeforeCreate` stamps `auth()->id()` on create across all four
+    resources.
+  - Hard delete disabled (D28): `ForceDeleteAction` and `ForceDeleteBulkAction` removed from `Account` and
+    `Transaction` resources to prevent UI-level bypass of the soft-delete protection established in D19/D20.
+- **Technical decisions:**
+  - **D27:** Single-owner panel without multi-tenancy or Filament policies for this phase.
+  - **D28:** No force-delete exposed in the panel for soft-deletable models.
+  - **D29:** String-backed enums `AccountType` and `CategoryType` created and cast to prevent magic strings
+    and align form options with validation rules.
+  - **D30:** Positive amount + direction selector pattern with dehydration hook to satisfy the D24 sign
+    convention transparently for the user.
+- **Verified:**
+  - `vendor/bin/pint`: PASS across 58 files (0 issues).
+  - Unit tests: 15 tests, 33 assertions passed (2 for `AccountType`, 2 for `CategoryType`, 4 for
+    `DomainModelCasts`, 2 for `TransactionStatus`, 3 for `UserSoftDelete`, 2 examples).
+  - Routes: `php artisan route:list --path=admin` confirms all 15 routes registered (dashboard, auth,
+    and 3 routes per resource: `index`, `create`, `edit`).
+- **Open items:** Feature/HTTP tests for the domain resources cannot run on the default SQLite
+  in-memory test database because SQLite only runs Laravel's migrations (`users`, `cache`, `jobs`),
+  leaving out the domain tables from `01-personal-finances.sql`. Resolving this requires a decision on the
+  test database strategy.
+
+

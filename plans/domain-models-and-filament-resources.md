@@ -1,8 +1,14 @@
 # Domain models and Filament resources (accounts, categories, transactions, budgets)
 
 ## Status
-`blocked` — plan written, nothing implemented. The ownership scope (see "Blockers") is the one
-decision that shapes every resource; everything else follows the schema as it stands.
+`in-progress` — Modelos de dominio (`Account`, `Category`, `Transaction`, `Budget`), enums de soporte (`AccountType`, `CategoryType`) y recursos Filament (`AccountResource`, `CategoryResource`, `TransactionResource`, `BudgetResource`) implementados con formularios, tablas y mutaciones de páginas. Pint limpio (58 ficheros) y suite de tests unitarios pasando (15 tests, 33 aserciones). Las pruebas Feature/HTTP que interactúan con las tablas de dominio quedan pendientes de la decisión de estrategia de base de datos para tests (SQLite en memoria no contiene el esquema importado por SQL).
+
+## Decisiones tomadas durante la implementación
+
+- **D27**: Panel con modelo de propietario único por ahora (sin multi-tenant ni políticas de Filament en esta fase). La propiedad del usuario se estampa automáticamente en `mutateFormDataBeforeCreate` en la página `Create` de cada recurso.
+- **D28**: No exponer `ForceDeleteAction` ni `ForceDeleteBulkAction` en el panel para `Account` ni `Transaction`. Ambos usan soft deletes, y exponer una vía de borrado físico en la UI reabriría el riesgo de pérdida de datos que motivó D19 y D20. El borrado suave y la restauración quedan disponibles.
+- **D29**: Creación de los enums con respaldo string `App\Enums\AccountType` (`cash`, `bank`, `card`, `savings`) y `App\Enums\CategoryType` (`income`, `expense`), y asignación mediante `casts()` en los modelos. Esto alinea las opciones del formulario, la validación (`Rule::enum`) y los atributos del modelo sin duplicar literales ni recurrir a cadenas mágicas.
+- **D30**: El formulario de `Transaction` captura el importe como un número positivo junto con un selector de dirección (`expense` / `income`, por defecto `expense`), y aplica el signo correspondiente al guardar mediante `dehydrateStateUsing` (negativo para gastos según D24). La página de edición invierte esto para su presentación mediante `mutateFormDataBeforeFill`. El campo `currency` en cuentas pasa a mayúsculas automáticamente al deshidratarse.
 
 ## Context
 The panel at `/admin` has existed since step 4 but exposes nothing: `app/Models/User.php` is the only
